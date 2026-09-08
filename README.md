@@ -13,6 +13,29 @@ If you just want the mod, install the original from Windhawk. This repository
 exists to keep these particular modifications versioned, and to write down why
 each one was needed — several of them turned out to have non-obvious causes.
 
+## Screenshots
+
+All three are captured from this build on a light-themed Windows desktop,
+cropped to the island's own window.
+
+**Expanded media card** — hover opens it. Light theme, spectrum analyzer in the
+top right, draggable progress bar, and control glyphs lifted to a readable
+brightness against an accent sampled from the album art.
+
+![Expanded media card](previews/expanded.png)
+
+**Collapsed pill** — the idle state while music plays: cover on the left, the
+spectrum filling the rest of the pill. It used to sit in a fixed 28 px box with
+roughly 46 px of empty pill beside it.
+
+![Collapsed pill](previews/collapsed.png)
+
+**Volume, with a second activity beside it** — the caption is localized and
+measured so that the value sits right next to it as one centred group, instead
+of the two being pinned to opposite edges of the card.
+
+![Volume card](previews/volume.png)
+
 ---
 
 ## 1. The visualizer was a ticker, not a visualizer

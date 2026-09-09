@@ -2339,10 +2339,24 @@ DWORD WINAPI WeatherThreadProc(void*) {
     return 0;
 }
 
+// The capture feeds the spectrum, and DrawSpectrum is only reached while a
+// session is playing. Running the stream and its FFT the rest of the time did
+// ~47 transforms a second whose results were thrown away.
+bool MediaIsPlaying() {
+    std::lock_guard lock(g_stateMutex);
+    return g_state.media.available && g_state.media.playing;
+}
+
 DWORD WINAPI AudioThreadProc(void*) {
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
     while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
+        if (!MediaIsPlaying()) {
+            // Nothing to analyse: keep the endpoint closed entirely.
+            WaitForSingleObject(g_stopEvent, 500);
+            continue;
+        }
+
         ComPtr<IMMDeviceEnumerator> enumerator;
         ComPtr<IMMDevice> device;
         ComPtr<IAudioClient> client;
@@ -2382,7 +2396,16 @@ DWORD WINAPI AudioThreadProc(void*) {
             continue;
         }
 
+        int playbackCheck = 0;
         while (WaitForSingleObject(g_stopEvent, 16) == WAIT_TIMEOUT) {
+            // Roughly twice a second; cheap enough next to the capture itself.
+            if (++playbackCheck >= 30) {
+                playbackCheck = 0;
+                if (!MediaIsPlaying()) {
+                    break;
+                }
+            }
+
             UINT32 packetFrames = 0;
             if (FAILED(capture->GetNextPacketSize(&packetFrames))) {
                 break;
@@ -2416,6 +2439,8 @@ DWORD WINAPI AudioThreadProc(void*) {
         }
 
         client->Stop();
+        // Let the bars fall instead of freezing at their last height.
+        PushSpectrumSilence();
         if (mixFormat) {
             CoTaskMemFree(mixFormat);
         }
@@ -2527,7 +2552,12 @@ void UpdateSystemSnapshot() {
         next.charging = g_state.system.charging;
     }
 
-    next.gpuPercent = GetGpuUsage();
+    // PdhGetFormattedCounterArrayW walks every GPU engine instance on the
+    // system, and only DrawGameOverlay ever reads the result.
+    next.gpuPercent = (g_settings.gameOverlay ||
+                       Wh_GetIntValue(L"GameOverlayPinned", 0) != 0)
+                          ? GetGpuUsage()
+                          : 0;
 
     MEMORYSTATUSEX memory = {};
     memory.dwLength = sizeof(memory);
@@ -6717,7 +6747,11 @@ DWORD WINAPI RenderThreadProc(void*) {
                             hover, pinned, now);
         }
 
-        WaitForSingleObject(g_stopEvent, 16);
+        // Full rate while anything animates or an activity is on screen;
+        // otherwise a third of the wake-ups. A cursor-proximity check was tried
+        // here and measured worse: the island sits at the top centre, where the
+        // pointer passes often enough to keep it at full rate anyway.
+        WaitForSingleObject(g_stopEvent, needsRender ? 16 : 48);
     }
 
     renderer.Shutdown();

@@ -1,10 +1,10 @@
 // ==WindhawkMod==
-// @id              dynamic-island-for-windows
-// @name            Dynamic Island for Windows
-// @description     A living, breathing pill overlay inspired by iPhone's Dynamic Island. Reacts to media, downloads, clipboard, battery, and more.
-// @version         1.1.1
-// @author          Himanshu
-// @github          https://github.com/devcode90
+// @id              dynamic-island-enhanced
+// @name            Dynamic Island Enhanced
+// @description     Dynamic Island overlay with a spectrum analyzer, light theme, localization and a draggable progress bar
+// @version         1.0
+// @author          mishmax
+// @github          https://github.com/MAXZVER
 // @include         windhawk.exe
 // @compilerOptions -ladvapi32 -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lavrt -lsetupapi -lwinhttp -lpdh
 // @license         MIT
@@ -12,58 +12,58 @@
 
 // ==WindhawkModReadme==
 /*
-# Dynamic Island for Windows
+# Dynamic Island Enhanced
 
-A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful, highly-responsive UI to your Windows desktop. Built natively with hardware-accelerated Direct2D rendering for a buttery-smooth 60 FPS experience.
+A pill overlay inspired by the iPhone's Dynamic Island: it reacts to media,
+volume, clipboard, notifications, battery and devices.
 
-![Dynamic Island Preview](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/Full-preview.png)
+**Based on [Dynamic Island for Windows](https://github.com/devcode90/Dynamic-Island-for-Windows)
+by Himanshu ([@devcode90](https://github.com/devcode90)), used under the MIT
+license.** The architecture, the Direct2D renderer and the system integrations
+are his work; this is a separate build with the changes listed below. If you
+want the original behaviour, install his mod instead.
 
----
+![Expanded media card](https://raw.githubusercontent.com/MAXZVER/dynamic-island-windhawk/main/previews/expanded.png)
 
-## 🚀 Modules & Dashboards
+## What is different here
 
-The Dynamic Island intelligently expands to display context-aware dashboards. You can easily navigate between different views using your mouse scroll wheel.
+**A real spectrum analyzer.** The visualizer is a 1024-point FFT over 16
+log-spaced bands from 45 Hz to 14 kHz, so the bars stand still and bounce in
+place rather than scrolling sideways like a ticker. Levels go through a 60 dB
+window with slow auto-gain, so it looks the same at any listening volume, and
+the attack and release are time constants rather than per-sample factors.
 
-| Module | Description | Preview |
-| :--- | :--- | :--- |
-| **Media Player** | Shows live album art, track details, audio waveforms, and full playback controls. | ![Media](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png) |
-| **Calendar** | A sleek, perfectly aligned monthly calendar that highlights the current date. | ![Calendar](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png) |
-| **Weather** | Real-time weather stats powered by wttr.in, including wind speed, humidity, and "feels like" temperature. | ![Weather](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png) |
-| **Game Overlay** | Real-time FPS, CPU, GPU, and RAM utilization overlays tailored for gamers. | ![Gamebar](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png) |
-| **Idle View** | A minimal dashboard with your battery status, digital clock, and sleek pagination dots. | ![Idle](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png) |
-| **Camera Privacy** | Shows a green dot when an app is actively using your webcam. | ![Camera](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/camera-detected.png) |
-| **Mic Privacy** | Shows an orange dot when an app is actively using your microphone. | ![Mic](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/mic-detected.png) |
+**Light theme.** Follows the Windows app theme and switches live, or can be
+pinned to light or dark. Every translucent overlay — chips, tracks, badges,
+dividers, button discs — flips to black on a light pill instead of vanishing.
 
----
+**Localization.** English or Russian, or follow Windows. The calendar takes its
+day names and its first day of week from the chosen locale, and the weather
+description is fetched in that language.
 
-## ✨ Core Features
+**Contrast boost.** In Auto accent mode the colour is sampled from album art; a
+dark cover used to leave the media buttons and the visualizer invisible against
+the pill. Their colour is now lifted to a minimum brightness.
 
-- **Hardware Privacy Indicators:** A pulsing orange dot appears when your microphone is active, and a green dot when your camera is in use. Rate-limited polling ensures absolutely no CPU drain.
-- **High-Res Clipboard & Notifications:** Instantly see what you copied or your latest Windows notifications, featuring crisp, high-fidelity 64px app icons extracted directly from system executables.
-- **Dynamic Fluid Animations:** Fully smooth resizing and splitting when multiple events happen at once (e.g., media playing while you copy text or receive a notification).
-- **Customizable Aesthetics:** Switch between sleek OLED Black, Dark Gray, Midnight Blue, and Deep Purple themes from the right-click menu, or use the settings to dial in your exact hex colors.
+**A draggable progress bar.** Click or drag it to seek.
 
----
+![Volume](https://raw.githubusercontent.com/MAXZVER/dynamic-island-windhawk/main/previews/volume.png)
 
-## ⚙️ Usage & Settings
+**Shift to peek.** Hold Shift with the pointer over the island and it fades
+out, letting the click reach whatever is underneath.
 
-- **Hover & Scroll:** Hover over the island to seamlessly expand it. Use your mouse scroll wheel to swipe between the Media, Calendar, and Weather tabs.
-- **Right-Click Menu:** Right-click the island to access Theme presets, Transparency settings, and to pin the island open.
-- **Windhawk Settings:** Visit the Mod Settings tab to change the island's Position, Size Scale, Animation Speed, and toggle specific modules. You can also perfectly align the island using the new `Offset X` and `Offset Y` settings, and even select exactly which monitor the island should appear on (including a brand new "Follow Mouse" mode!).
-- **Notifications:** To use the notification module, you need to add `explorer.exe` to the process inclusion list in the Advanced tab of the mod settings and restart the mod.
+**Sizing.** Separate scales for text, the collapsed pill, the expanded card,
+the clipboard card and the media pill width. Compact cards derive their text
+rows from the text scale, so larger type no longer collides with the row below.
 
----
+## Notes
 
-## 📝 Feedback & Credits
+Seeking from inside a player that publishes its position only once per track
+(Yandex Music, for one) cannot be seen through the system media controls, so
+the bar will drift until the next track.
 
-### Feedback / Support / Bug Reports
-- Please use [Windhawk Mods Issues](https://github.com/ramensoftware/windhawk-mods/issues) or [dynamic-island-for-windows issues](https://github.com/devcode90/dynamic-island-for-windows/issues) to report bugs, request features, or share feedback.  
-- Clear descriptions, screenshots, or steps to reproduce help improve fixes and updates.  
-- Suggestions for UI/UX or new integrations are always welcome.
-
-### Credits
-- **[ciizerr @GitHub](https://github.com/ciizerr)**: Improved the UI by refining layout alignment, fixing dashboard scaling, and enhancing calendar and weather module integration.
-
+Source and a longer write-up of each change:
+<https://github.com/MAXZVER/dynamic-island-windhawk>
 */
 // ==/WindhawkModReadme==
 

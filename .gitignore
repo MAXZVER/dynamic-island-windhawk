@@ -1,0 +1,7 @@
+# Generated from the mod by standalone/gen_island.py
+standalone/island.cpp
+standalone/settings_defaults.inc
+
+# Build output
+standalone/*.exe
+standalone/*.o

@@ -39,23 +39,48 @@ Requires Windhawk installed for its bundled clang, or any mingw-w64 clang++ —
 point `CLANG` at it. The link is static, so the result is a single self-
 contained executable with no runtime DLLs to ship.
 
-## Memory: measured, not assumed
+## Memory, and which number to believe
 
-The standalone build was expected to be lighter. It is not:
+The standalone build was expected to be lighter. Pick the wrong counter and it
+looks twice as heavy; the counters disagree by a factor of four:
 
-| | Working set | Private | Threads |
-|---|---|---|---|
-| Windhawk host running the mod | 40.2 MB | 33.5 MB | 25 |
-| Bare Windhawk host, no mod | ~15 MB | ~3 MB | 3–4 |
-| **This standalone build** | **73.7 MB** | **70.1 MB** | 40 |
+| Counter | This build |
+|---|---|
+| Working set (includes shared DLLs) | ~72 MB |
+| Private bytes / commit charge | ~70 MB |
+| Committed private, walked with `VirtualQueryEx` | 33.9 MB |
+| **Working set – private (actual physical memory)** | **~17.5 MB** |
 
-Windhawk's own overhead is about 3 MB of private memory — everything else was
-always the island itself: Direct2D surfaces, album art, WinRT, the FFT buffers.
-Linking libc++ statically then costs more than the host ever did. Dropping
-`-static` and shipping the runtime DLLs alongside would win some of it back.
+The app owns about 17 MB of physical memory. The ~70 MB figure is commit
+charge, which counts committed-but-not-resident regions — the largest single
+one being 13.3 MB of `PAGE_WRITECOMBINE`, a Direct2D staging buffer. None of it
+is application code: it is Direct2D, WinRT, WIC and UI Automation.
+
+A like-for-like comparison against the Windhawk build was not made: the only
+figure taken there (33.5 MB) is commit charge, and by that same counter this
+build reads ~70 MB — but the Windhawk build was no longer running when the
+physical footprint was measured, so the two cannot be placed side by side.
+
+Two hypotheses for the difference were tested and both failed: a dynamically
+linked build measured no lighter than the static one (68.4 vs 67.8 MB commit),
+and the PE stack reserve/commit is identical to `windhawk.exe`'s.
 
 The reason to build standalone is independence — no Windhawk dependency, no
 catalog to pass through — not footprint.
+
+## Idle work
+
+Three things the island did while idle were removed: the WASAPI loopback stream
+is opened only while a session is playing (its FFT output is drawn only then),
+the render loop waits 48 ms instead of 16 ms when nothing animates, and the PDH
+GPU counter is queried only when the game overlay that reads it is on.
+
+Whether this is worth anything could not be shown. Repeated 25-second CPU
+samples of a single build spread across 4.4–5.3% of one core, wider than any
+difference between builds. The whole app costs about 0.17% of a 28-core
+machine, so there was little to win. A cursor-proximity check for the render
+interval was tried and reverted: it measured worse, because the island sits at
+the top centre where the pointer passes often.
 
 ## Not done yet
 

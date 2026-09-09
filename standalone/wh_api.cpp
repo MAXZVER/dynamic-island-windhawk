@@ -98,6 +98,65 @@ bool GetWriteTime(const std::wstring& path, FILETIME* out) {
     return true;
 }
 
+// First run only. If this machine has the Windhawk build of the mod, carry its
+// settings over: without this, switching to the standalone app silently resets
+// every scale, colour and language the user had chosen, which looks exactly
+// like the app losing its settings.
+void SeedFromWindhawk() {
+    static const wchar_t* kCandidates[] = {
+        L"SOFTWARE\\Windhawk\\Engine\\Mods\\local@dynamic-island-for-windows\\Settings",
+        L"SOFTWARE\\Windhawk\\Engine\\Mods\\local@dynamic-island-enhanced\\Settings",
+        L"SOFTWARE\\Windhawk\\Engine\\Mods\\dynamic-island-enhanced\\Settings",
+        L"SOFTWARE\\Windhawk\\Engine\\Mods\\dynamic-island-for-windows\\Settings",
+    };
+
+    for (const wchar_t* sub : kCandidates) {
+        HKEY key = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, sub, 0, KEY_READ, &key) !=
+            ERROR_SUCCESS) {
+            continue;
+        }
+
+        int carried = 0;
+        for (DWORD index = 0;; ++index) {
+            wchar_t name[256];
+            DWORD nameLen = ARRAYSIZE(name);
+            DWORD type = 0;
+            BYTE data[2048];
+            DWORD dataLen = sizeof(data) - sizeof(wchar_t);
+            if (RegEnumValueW(key, index, name, &nameLen, nullptr, &type, data,
+                              &dataLen) != ERROR_SUCCESS) {
+                break;
+            }
+
+            // Only keys this build actually has; anything else is stale.
+            if (g_settings.find(name) == g_settings.end()) {
+                continue;
+            }
+
+            if (type == REG_SZ) {
+                // The registry does not promise a terminator.
+                data[dataLen] = 0;
+                data[dataLen + 1] = 0;
+                g_settings[name] = reinterpret_cast<wchar_t*>(data);
+                ++carried;
+            } else if (type == REG_DWORD && dataLen == sizeof(DWORD)) {
+                wchar_t buffer[16];
+                _itow_s(*reinterpret_cast<DWORD*>(data), buffer,
+                        ARRAYSIZE(buffer), 10);
+                g_settings[name] = buffer;
+                ++carried;
+            }
+        }
+
+        RegCloseKey(key);
+        if (carried > 0) {
+            Wh_Log(L"Carried %d settings over from the Windhawk build", carried);
+            return;
+        }
+    }
+}
+
 void WriteDefaultConfig() {
     FILE* f = nullptr;
     if (_wfopen_s(&f, g_configPath.c_str(), L"wt, ccs=UTF-8") != 0 || !f) {
@@ -106,8 +165,15 @@ void WriteDefaultConfig() {
 
     fwprintf(f, L"# Dynamic Island settings.\n");
     fwprintf(f, L"# Edit and save; the app reloads this file within a second.\n\n");
+    // Values come from the map, not from kSettingDefaults: a migration from a
+    // Windhawk install has already written into it, and taking the compiled-in
+    // defaults here would throw that away the moment the file is read back.
+    // The array is still what sets the order, so the file stays grouped the way
+    // the mod's own settings are.
     for (const auto& def : kSettingDefaults) {
-        fwprintf(f, L"%ls=%ls\n", def.name, def.value);
+        const auto it = g_settings.find(def.name);
+        fwprintf(f, L"%ls=%ls\n", def.name,
+                 it == g_settings.end() ? def.value : it->second.c_str());
     }
     fclose(f);
 }
@@ -233,6 +299,7 @@ const wchar_t* Initialize() {
     }
 
     if (GetFileAttributesW(g_configPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        SeedFromWindhawk();
         WriteDefaultConfig();
     }
 

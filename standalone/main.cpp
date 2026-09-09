@@ -9,6 +9,8 @@
 
 #include <shellapi.h>
 
+#include <cmath>
+
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"DynamicIslandStandaloneHost";
@@ -24,13 +26,83 @@ HWND g_hwnd = nullptr;
 NOTIFYICONDATAW g_tray{};
 bool g_trayAdded = false;
 
+// The tray needs an icon of our own; LoadIcon(IDI_APPLICATION) gives the
+// generic window placeholder, which says nothing about what is running.
+// Drawing the island's own shape avoids carrying an .ico and a resource
+// compiler around for 32x32 pixels.
+HICON CreateIslandIcon() {
+    constexpr int kSize = 32;
+    BITMAPV5HEADER header{};
+    header.bV5Size = sizeof(header);
+    header.bV5Width = kSize;
+    header.bV5Height = -kSize;  // top-down
+    header.bV5Planes = 1;
+    header.bV5BitCount = 32;
+    header.bV5Compression = BI_BITFIELDS;
+    header.bV5RedMask = 0x00FF0000;
+    header.bV5GreenMask = 0x0000FF00;
+    header.bV5BlueMask = 0x000000FF;
+    header.bV5AlphaMask = 0xFF000000;
+
+    HDC screen = GetDC(nullptr);
+    void* bits = nullptr;
+    HBITMAP colour = CreateDIBSection(screen, (BITMAPINFO*)&header,
+                                      DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!colour || !bits) {
+        return nullptr;
+    }
+
+    // A pill: 24x11 centred, fully rounded ends. Filled with the default
+    // accent so it stays legible on both a light and a dark taskbar.
+    const float halfW = 12.0f;
+    const float halfH = 5.5f;
+    const float radius = halfH;
+    auto* pixels = static_cast<DWORD*>(bits);
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            const float dx = std::abs(x + 0.5f - kSize / 2.0f) - (halfW - radius);
+            const float dy = std::abs(y + 0.5f - kSize / 2.0f) - (halfH - radius);
+            const float ax = dx > 0.0f ? dx : 0.0f;
+            const float ay = dy > 0.0f ? dy : 0.0f;
+            const float dist = std::sqrt(ax * ax + ay * ay) - radius;
+
+            // One pixel of falloff so the edge is not stair-stepped.
+            float coverage = 0.5f - dist;
+            coverage = coverage < 0.0f ? 0.0f : (coverage > 1.0f ? 1.0f : coverage);
+
+            const BYTE a = static_cast<BYTE>(coverage * 255.0f + 0.5f);
+            // Premultiplied, which is what the shell expects for 32-bit icons.
+            const BYTE r = static_cast<BYTE>(0x4c * a / 255);
+            const BYTE g = static_cast<BYTE>(0xc9 * a / 255);
+            const BYTE b = static_cast<BYTE>(0xf0 * a / 255);
+            pixels[y * kSize + x] =
+                (DWORD(a) << 24) | (DWORD(r) << 16) | (DWORD(g) << 8) | b;
+        }
+    }
+
+    HBITMAP mask = CreateBitmap(kSize, kSize, 1, 1, nullptr);
+    ICONINFO info{};
+    info.fIcon = TRUE;
+    info.hbmColor = colour;
+    info.hbmMask = mask;
+    HICON icon = CreateIconIndirect(&info);
+
+    DeleteObject(colour);
+    DeleteObject(mask);
+    return icon;
+}
+
 void AddTrayIcon(HINSTANCE instance) {
     g_tray.cbSize = sizeof(g_tray);
     g_tray.hWnd = g_hwnd;
     g_tray.uID = 1;
     g_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_tray.uCallbackMessage = WM_APP_TRAY;
-    g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    g_tray.hIcon = CreateIslandIcon();
+    if (!g_tray.hIcon) {
+        g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    }
     wcscpy_s(g_tray.szTip, L"Dynamic Island");
     g_trayAdded = Shell_NotifyIconW(NIM_ADD, &g_tray) != FALSE;
     UNREFERENCED_PARAMETER(instance);

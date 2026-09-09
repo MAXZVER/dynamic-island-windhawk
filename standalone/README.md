@@ -82,9 +82,25 @@ machine, so there was little to win. A cursor-proximity check for the render
 interval was tried and reverted: it measured worse, because the island sits at
 the top centre where the pointer passes often.
 
+## Settings window
+
+The tray icon opens a window built from the same YAML the mod declares its
+settings in: `gen_island.py` turns it into a table of captions, descriptions
+and choices, so adding a setting to the mod and regenerating is enough for it
+to appear here as a dropdown, checkbox or field. Descriptions are tooltips.
+Saving writes `config.ini` and applies immediately.
+
+Launching the executable again opens that window on the copy already running,
+rather than doing nothing.
+
+## Autostart
+
+Tray menu, "Start with Windows": a per-user `Run` entry, so no elevation and it
+follows the account rather than the machine. The path is quoted, since a space
+in it would otherwise split the command.
+
 ## Not done yet
 
-- No autostart entry; add a shortcut to `shell:startup` by hand for now.
-- The tray menu only opens the settings file, reloads it, and exits. The
-  island's own right-click menu still works as before.
 - The executable is unsigned, so SmartScreen will warn on a fresh machine.
+- The settings window has no scrolling: it sizes itself to the largest group,
+  which is fine for 18 rows and would need revisiting well before 40.

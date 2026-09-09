@@ -333,6 +333,27 @@ bool ReloadIfChanged() {
     return true;
 }
 
+std::wstring GetSetting(const wchar_t* key) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const auto it = g_settings.find(key);
+    return it == g_settings.end() ? std::wstring() : it->second;
+}
+
+void SetSetting(const wchar_t* key, const wchar_t* value) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_settings[key] = value;
+}
+
+bool SaveConfig() {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        WriteDefaultConfig();  // writes the map, ordered by the defaults table
+    }
+    // Adopt our own write so the watcher does not reload it right back.
+    GetWriteTime(g_configPath, &g_configWriteTime);
+    return true;
+}
+
 const wchar_t* ConfigPath() {
     return g_configPath.c_str();
 }

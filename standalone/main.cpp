@@ -10,6 +10,11 @@
 #include <shellapi.h>
 
 #include <cmath>
+#include <string>
+
+// Implemented in settings_ui.cpp.
+void ShowSettingsWindow(HINSTANCE instance);
+HWND SettingsWindowHandle();
 
 namespace {
 
@@ -18,10 +23,20 @@ constexpr wchar_t kInstanceMutex[] = L"DynamicIslandStandalone.SingleInstance";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
 constexpr UINT kTimerReloadCheck = 1;
 
-constexpr UINT kMenuOpenSettings = 100;
-constexpr UINT kMenuReload = 101;
-constexpr UINT kMenuExit = 102;
+constexpr UINT kMenuSettings = 100;
+constexpr UINT kMenuOpenFile = 101;
+constexpr UINT kMenuReload = 102;
+constexpr UINT kMenuAutostart = 103;
+constexpr UINT kMenuExit = 104;
 
+constexpr wchar_t kRunKey[] =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValue[] = L"DynamicIsland";
+
+HINSTANCE g_instance = nullptr;
+// Lets a second launch of the exe open the settings of the running copy
+// instead of silently doing nothing.
+UINT g_showSettingsMsg = 0;
 HWND g_hwnd = nullptr;
 NOTIFYICONDATAW g_tray{};
 bool g_trayAdded = false;
@@ -108,13 +123,55 @@ void AddTrayIcon(HINSTANCE instance) {
     UNREFERENCED_PARAMETER(instance);
 }
 
+bool AutostartEnabled() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return false;
+    }
+    const bool present =
+        RegQueryValueExW(key, kRunValue, nullptr, nullptr, nullptr, nullptr) ==
+        ERROR_SUCCESS;
+    RegCloseKey(key);
+    return present;
+}
+
+// Per-user Run key: no elevation, and it follows the account rather than the
+// machine. The path is quoted so a space in it cannot split the command.
+void SetAutostart(bool enable) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_WRITE,
+                        nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return;
+    }
+
+    if (enable) {
+        wchar_t path[MAX_PATH];
+        if (GetModuleFileNameW(nullptr, path, ARRAYSIZE(path))) {
+            const std::wstring quoted = L"\"" + std::wstring(path) + L"\"";
+            RegSetValueExW(
+                key, kRunValue, 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(quoted.c_str()),
+                static_cast<DWORD>((quoted.size() + 1) * sizeof(wchar_t)));
+        }
+    } else {
+        RegDeleteValueW(key, kRunValue);
+    }
+
+    RegCloseKey(key);
+}
+
 void ShowTrayMenu() {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING, kMenuOpenSettings, L"Open settings file");
+    AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
+    AppendMenuW(menu, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0),
+                kMenuAutostart, L"Start with Windows");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"Open settings file");
     AppendMenuW(menu, MF_STRING, kMenuReload, L"Reload settings");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
@@ -132,15 +189,22 @@ LRESULT CALLBACK HostWndProc(HWND hwnd, UINT message, WPARAM wParam,
                              LPARAM lParam) {
     switch (message) {
         case WM_APP_TRAY:
-            if (LOWORD(lParam) == WM_RBUTTONUP ||
-                LOWORD(lParam) == WM_LBUTTONUP) {
+            if (LOWORD(lParam) == WM_RBUTTONUP) {
                 ShowTrayMenu();
+            } else if (LOWORD(lParam) == WM_LBUTTONUP) {
+                ShowSettingsWindow(g_instance);
             }
             return 0;
 
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
-                case kMenuOpenSettings:
+                case kMenuSettings:
+                    ShowSettingsWindow(g_instance);
+                    return 0;
+                case kMenuAutostart:
+                    SetAutostart(!AutostartEnabled());
+                    return 0;
+                case kMenuOpenFile:
                     ShellExecuteW(nullptr, L"open", whshim::ConfigPath(),
                                   nullptr, nullptr, SW_SHOWNORMAL);
                     return 0;
@@ -163,6 +227,13 @@ LRESULT CALLBACK HostWndProc(HWND hwnd, UINT message, WPARAM wParam,
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
+
+        default:
+            if (message == g_showSettingsMsg && g_showSettingsMsg) {
+                ShowSettingsWindow(g_instance);
+                return 0;
+            }
+            break;
     }
 
     return DefWindowProcW(hwnd, message, wParam, lParam);
@@ -171,11 +242,19 @@ LRESULT CALLBACK HostWndProc(HWND hwnd, UINT message, WPARAM wParam,
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    g_instance = instance;
+
     // The mod already guards against two islands fighting over the overlay;
     // keep that guarantee now that there is no engine to enforce it.
+    g_showSettingsMsg = RegisterWindowMessageW(L"DynamicIsland.ShowSettings");
+
     HANDLE single = CreateMutexW(nullptr, TRUE, kInstanceMutex);
     if (!single || GetLastError() == ERROR_ALREADY_EXISTS) {
-        return 1;
+        // Already running: ask that copy to show its settings, then step aside.
+        if (g_showSettingsMsg) {
+            PostMessageW(HWND_BROADCAST, g_showSettingsMsg, 0, 0);
+        }
+        return 0;
     }
 
     // The tray, the shell menu and SHGetKnownFolderPath all expect COM on this
@@ -195,9 +274,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
 
-    // Message-only window: it exists for the tray icon and the timer.
-    g_hwnd = CreateWindowExW(0, kWindowClass, L"Dynamic Island", 0, 0, 0, 0, 0,
-                             HWND_MESSAGE, nullptr, instance, nullptr);
+    // Hidden, but a real top-level window rather than message-only: those
+    // receive no broadcasts, and the second-instance handoff below needs one.
+    g_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, L"Dynamic Island",
+                             WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance,
+                             nullptr);
     if (!g_hwnd) {
         return 1;
     }
@@ -214,6 +295,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        // Without this the settings window gets no Tab, Enter or Esc.
+        HWND settings = SettingsWindowHandle();
+        if (settings && IsDialogMessageW(settings, &msg)) {
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

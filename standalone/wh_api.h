@@ -8,6 +8,8 @@
 
 #include <windows.h>
 
+#include <string>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -49,5 +51,12 @@ const wchar_t* Initialize();
 bool ReloadIfChanged();
 
 const wchar_t* ConfigPath();
+
+// Used by the settings window: read a current value, stage a change, then
+// write the file. Saving updates the watched timestamp too, so the file
+// watcher does not immediately reload what we just wrote.
+std::wstring GetSetting(const wchar_t* key);
+void SetSetting(const wchar_t* key, const wchar_t* value);
+bool SaveConfig();
 
 }  // namespace whshim

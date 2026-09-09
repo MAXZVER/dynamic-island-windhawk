@@ -4,7 +4,7 @@
 The mod file stays the single source of truth: this script strips the Windhawk
 tool-mod bootstrap (which only exists to spawn a host process and hook its
 entry point — a standalone .exe is that host) and turns the settings block into
-compiled-in defaults.
+compiled-in defaults plus the metadata the settings window is built from.
 
 Run it again after editing the mod to re-sync.
 """
@@ -29,30 +29,108 @@ BOOTSTRAP_SYMBOLS = [
     "Wh_SetFunctionHook",
 ]
 
+TYPE_TEXT, TYPE_BOOL, TYPE_INT, TYPE_ENUM = 0, 1, 2, 3
+
+
+def unquote(v):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        return v[1:-1]
+    return v
+
 
 def parse_settings(block):
-    """Flatten the mod's YAML settings block into Group.Key -> default."""
-    defaults = []
-    group = None
-    for line in block.split("\n"):
+    """Flatten the mod's YAML settings block into ordered setting records."""
+    settings = []
+    group_id = None
+    group_name = None
+    current = None
+    in_options = False
+
+    lines = block.split("\n")
+    for line in lines:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        # "- Appearance:" opens a group.
+
         m = re.match(r"^- (\w+):\s*$", line)
         if m:
-            group = m.group(1)
+            group_id = m.group(1)
+            group_name = group_id
+            current = None
+            in_options = False
             continue
-        # "  - Key: value" is a setting inside the current group.
+
+        # "  $name:" at group level names the group, and it appears after its
+        # settings, so patch it into the ones already collected.
+        m = re.match(r"^  \$name:\s*(.*)$", line)
+        if m and group_id:
+            group_name = unquote(m.group(1))
+            for s in settings:
+                if s["group_id"] == group_id:
+                    s["group"] = group_name
+            current = None
+            continue
+
         m = re.match(r"^  - (\w+):\s*(.*)$", line)
-        if m and group:
-            key, value = m.group(1), m.group(2).strip()
-            if value.startswith(("'", '"')) and value.endswith(("'", '"')):
-                value = value[1:-1]
-            defaults.append((group + "." + key, value))
-    return defaults
+        if m and group_id:
+            key, value = m.group(1), unquote(m.group(2))
+            current = {
+                "key": group_id + "." + key,
+                "group_id": group_id,
+                "group": group_name,
+                "name": key,
+                "desc": "",
+                "default": value,
+                "options": [],
+            }
+            settings.append(current)
+            in_options = False
+            continue
+
+        if current is None:
+            continue
+
+        m = re.match(r"^    \$name:\s*(.*)$", line)
+        if m:
+            current["name"] = unquote(m.group(1))
+            in_options = False
+            continue
+
+        m = re.match(r"^    \$description:\s*(.*)$", line)
+        if m:
+            desc = m.group(1).strip()
+            current["desc"] = "" if desc in (">-", "|", ">") else unquote(desc)
+            in_options = False
+            continue
+
+        if re.match(r"^    \$options:\s*$", line):
+            in_options = True
+            continue
+
+        m = re.match(r"^      - (.+?):\s*(.*)$", line)
+        if m and in_options:
+            current["options"].append((unquote(m.group(1)), unquote(m.group(2))))
+            continue
+
+        # Folded description continuation.
+        m = re.match(r"^      (\S.*)$", line)
+        if m and not in_options and current["desc"] == "":
+            current["desc"] = m.group(1).strip()
+
+    return settings
 
 
-def cpp_escape(s):
+def infer_type(s):
+    if s["options"]:
+        return TYPE_ENUM
+    if s["default"].lower() in ("true", "false"):
+        return TYPE_BOOL
+    if re.match(r"^-?\d+$", s["default"]):
+        return TYPE_INT
+    return TYPE_TEXT
+
+
+def esc(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
@@ -70,10 +148,10 @@ def main():
         if entry not in body:
             sys.exit("error: %s not found in the mod body" % entry)
 
-    settings_block = src[src.index("==WindhawkModSettings=="):
-                         src.index("==/WindhawkModSettings==")]
-    defaults = parse_settings(settings_block)
-    if not defaults:
+    block = src[src.index("==WindhawkModSettings=="):
+                src.index("==/WindhawkModSettings==")]
+    settings = parse_settings(block)
+    if not settings:
         sys.exit("error: no settings parsed")
 
     header = (
@@ -84,17 +162,34 @@ def main():
     io.open(os.path.join(HERE, "island.cpp"), "w", encoding="utf-8",
             newline=CRLF).write(header + body)
 
-    lines = [header, "// Defaults taken from the mod's own settings block.\n",
-             "static const SettingDefault kSettingDefaults[] = {\n"]
-    for key, value in defaults:
-        lines.append('    {L"%s", L"%s"},\n' % (cpp_escape(key), cpp_escape(value)))
-    lines.append("};\n")
-    io.open(os.path.join(HERE, "settings_defaults.inc"), "w", encoding="utf-8",
-            newline=CRLF).write("".join(lines))
+    out = [header]
+    for i, s in enumerate(settings):
+        if s["options"]:
+            out.append("static const SettingOption kOptions%d[] = {\n" % i)
+            for value, label in s["options"]:
+                out.append('    {L"%s", L"%s"},\n' % (esc(value), esc(label)))
+            out.append("};\n")
+    out.append("\nstatic const SettingMeta kSettings[] = {\n")
+    for i, s in enumerate(settings):
+        out.append(
+            '    {L"%s", L"%s", L"%s", L"%s", L"%s", %d, %s, %d},\n'
+            % (esc(s["key"]), esc(s["group"]), esc(s["name"]), esc(s["desc"]),
+               esc(s["default"]), infer_type(s),
+               ("kOptions%d" % i) if s["options"] else "nullptr",
+               len(s["options"])))
+    out.append("};\n")
+    io.open(os.path.join(HERE, "settings_meta.inc"), "w", encoding="utf-8",
+            newline=CRLF).write("".join(out))
 
-    print("island.cpp:            %d lines (bootstrap stripped: %d)"
+    groups = []
+    for s in settings:
+        if s["group"] not in groups:
+            groups.append(s["group"])
+    print("island.cpp:        %d lines (bootstrap stripped: %d)"
           % (body.count("\n") + 1, src.count("\n") - body.count("\n")))
-    print("settings_defaults.inc: %d settings" % len(defaults))
+    print("settings_meta.inc: %d settings in %d groups" % (len(settings), len(groups)))
+    for g in groups:
+        print("   - %s" % g)
 
 
 if __name__ == "__main__":

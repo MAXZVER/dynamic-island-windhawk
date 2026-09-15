@@ -1253,10 +1253,12 @@ HICON getProcessIcon(DWORD pid) {
         }
 
         HICON large = nullptr;
-        HICON small = nullptr;
-        if (ExtractIconExW(path.c_str(), 0, &large, &small, 1) > 0) {
-            if (small) {
-                DestroyIcon(small);
+        // Not "small": the Windows SDK defines that as a macro for char in
+        // rpcndr.h, which mingw tolerates here and MSVC does not.
+        HICON smallIcon = nullptr;
+        if (ExtractIconExW(path.c_str(), 0, &large, &smallIcon, 1) > 0) {
+            if (smallIcon) {
+                DestroyIcon(smallIcon);
             }
             if (large) {
                 return large;
@@ -4237,8 +4239,11 @@ class Renderer {
             if (hasWeather) swprintf_s(weatherLabel, L"%s %.0f\x00B0", wIcon.c_str(), state.weather.temperature);
             else wcscpy_s(weatherLabel, ARRAYSIZE(weatherLabel), L"🌡️ --\x00B0");
 
+            // Stop at a margin rather than at rect.right: the pill is rounded,
+            // so text flush with the edge sits on the curve and reads as if it
+            // had escaped the island.
             D2D1_RECT_F wRect = D2D1::RectF(rect.left + 94.0f * scale, rect.top + 7.0f * scale,
-                                            rect.right, rect.bottom - 7.0f * scale);
+                                            rect.right - 12.0f * scale, rect.bottom - 7.0f * scale);
             target_->DrawTextW(weatherLabel, static_cast<UINT32>(wcslen(weatherLabel)), smallTextFormat_.Get(),
                                wRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
             textBrush_->SetOpacity(1.0f);
@@ -5895,8 +5900,15 @@ Activity ActivityForKind(IslandKind kind, const Settings& settings, const Shared
                 activity.width = 0.0f;
                 activity.height = 0.0f;
             } else {
-                activity.width = 170.0f;
-                activity.height = 36.0f;
+                // The collapsed pill lays its contents out at fixed offsets -
+                // clock at 20..80, divider at 82, weather from 94 - and every
+                // one of them is multiplied by the text scale. The pill itself
+                // was not, so a larger text scale pushed the temperature past
+                // the rounded end. This is the same compensation the clipboard,
+                // notification and volume cards already carry.
+                const float extra = 90.0f * std::max(0.0f, settings.textScale - 1.0f);
+                activity.width = 170.0f + extra;
+                activity.height = 36.0f + 10.0f * std::max(0.0f, settings.textScale - 1.0f);
             }
             break;
     }

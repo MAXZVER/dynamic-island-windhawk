@@ -8,6 +8,8 @@
 #include "wh_api.h"
 
 #include <shellapi.h>
+// Known folders, IShellLink and SHCreateDirectoryExW, for the self-install.
+#include <shlobj.h>
 
 #include <cmath>
 #include <string>
@@ -239,10 +241,169 @@ LRESULT CALLBACK HostWndProc(HWND hwnd, UINT message, WPARAM wParam,
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
+// ── Self-install ─────────────────────────────────────────────────────────────
+// One file is the whole product. Run it from a Downloads folder and it offers
+// to put itself where it belongs and start with Windows; -Install does that
+// without asking, -Uninstall takes it back out.
+//
+// It writes a Startup shortcut rather than the Run key that "Start with
+// Windows" in the tray menu uses: a shortcut is visible in Explorer and can be
+// removed without a registry editor. The two are independent - switching both
+// on would launch two islands.
+
+std::wstring KnownFolder(REFKNOWNFOLDERID id) {
+    PWSTR raw = nullptr;
+    std::wstring result;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &raw)) && raw) {
+        result = raw;
+    }
+    if (raw) CoTaskMemFree(raw);
+    return result;
+}
+
+std::wstring SelfPath() {
+    wchar_t buf[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, buf, ARRAYSIZE(buf));
+    return buf;
+}
+
+std::wstring InstallDir()   { return KnownFolder(FOLDERID_LocalAppData) + L"\\DynamicIsland"; }
+std::wstring InstalledExe() { return InstallDir() + L"\\DynamicIsland.exe"; }
+std::wstring StartupLink()  { return KnownFolder(FOLDERID_Startup) + L"\\Dynamic Island.lnk"; }
+
+bool SamePath(const std::wstring& a, const std::wstring& b) {
+    return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool RunningFromInstallDir() { return SamePath(SelfPath(), InstalledExe()); }
+
+bool WriteShortcut(const std::wstring& link, const std::wstring& target,
+                   const std::wstring& workDir) {
+    IShellLinkW* shortcut = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_IShellLinkW, reinterpret_cast<void**>(&shortcut)))) {
+        return false;
+    }
+    shortcut->SetPath(target.c_str());
+    shortcut->SetWorkingDirectory(workDir.c_str());
+    shortcut->SetDescription(L"Dynamic Island for Windows");
+
+    IPersistFile* file = nullptr;
+    bool saved = false;
+    if (SUCCEEDED(shortcut->QueryInterface(IID_IPersistFile,
+                                           reinterpret_cast<void**>(&file)))) {
+        saved = SUCCEEDED(file->Save(link.c_str(), TRUE));
+        file->Release();
+    }
+    shortcut->Release();
+    return saved;
+}
+
+// A copy already running out of the install folder holds its own .exe open, so
+// ask it to quit before overwriting the file.
+void StopInstalledCopy() {
+    HWND running = FindWindowW(kWindowClass, nullptr);
+    if (!running) return;
+    PostMessageW(running, WM_CLOSE, 0, 0);
+    for (int i = 0; i < 50 && IsWindow(running); ++i) {
+        Sleep(100);
+    }
+}
+
+bool InstallSelf() {
+    const std::wstring dir = InstallDir();
+    const std::wstring dst = InstalledExe();
+
+    SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
+
+    if (!RunningFromInstallDir()) {
+        StopInstalledCopy();
+        if (!CopyFileW(SelfPath().c_str(), dst.c_str(), FALSE)) {
+            MessageBoxW(nullptr, L"Could not copy the executable into your profile.",
+                        L"Dynamic Island", MB_ICONERROR);
+            return false;
+        }
+    }
+
+    WriteShortcut(StartupLink(), dst, dir);
+    ShellExecuteW(nullptr, L"open", dst.c_str(), nullptr, dir.c_str(), SW_SHOWNORMAL);
+    return true;
+}
+
+void UninstallSelf() {
+    StopInstalledCopy();
+    DeleteFileW(StartupLink().c_str());
+
+    // and the Run entry, in case "Start with Windows" was ever ticked
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_WRITE, &key) == ERROR_SUCCESS) {
+        RegDeleteValueW(key, kRunValue);
+        RegCloseKey(key);
+    }
+
+    // The folder cannot remove itself while this exe runs out of it.
+    const std::wstring command =
+        L"/c timeout /t 2 /nobreak >nul & rmdir /s /q \"" + InstallDir() + L"\"";
+    ShellExecuteW(nullptr, L"open", L"cmd.exe", command.c_str(), nullptr, SW_HIDE);
+}
+
+// Returns true when the command line was the whole job and the process should
+// stop rather than go on to show an island.
+bool HandleSetupCommandLine() {
+    int count = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!argv) return false;
+
+    bool install = false, uninstall = false, noPrompt = false;
+    for (int i = 1; i < count; ++i) {
+        std::wstring arg = argv[i];
+        while (!arg.empty() && (arg.front() == L'-' || arg.front() == L'/')) arg.erase(0, 1);
+        if (_wcsicmp(arg.c_str(), L"install") == 0)   install = true;
+        if (_wcsicmp(arg.c_str(), L"uninstall") == 0) uninstall = true;
+        if (_wcsicmp(arg.c_str(), L"noprompt") == 0)  noPrompt = true;
+    }
+    LocalFree(argv);
+
+    if (uninstall) {
+        UninstallSelf();
+        MessageBoxW(nullptr, L"Dynamic Island has been removed.", L"Dynamic Island",
+                    MB_ICONINFORMATION);
+        return true;
+    }
+    if (install) {
+        InstallSelf();
+        return true;
+    }
+
+    if (!noPrompt && !RunningFromInstallDir() &&
+        GetFileAttributesW(InstalledExe().c_str()) == INVALID_FILE_ATTRIBUTES) {
+        const int answer = MessageBoxW(
+            nullptr,
+            L"Install Dynamic Island for your user account and start it with Windows?\r\n\r\n"
+            L"It will be copied to your local app data folder. No administrator rights are "
+            L"needed, and running this file with -Uninstall removes it again.",
+            L"Dynamic Island", MB_ICONQUESTION | MB_YESNOCANCEL);
+        if (answer == IDCANCEL) return true;
+        if (answer == IDYES) {
+            InstallSelf();
+            return true;
+        }
+        // IDNO: carry on running from wherever this copy sits
+    }
+    return false;
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     g_instance = instance;
+
+    // Setup runs before the single-instance mutex: installing means replacing
+    // the copy that already holds it.
+    const HRESULT hrSetup = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool handled = HandleSetupCommandLine();
+    if (SUCCEEDED(hrSetup)) CoUninitialize();
+    if (handled) return 0;
 
     // The mod already guards against two islands fighting over the overlay;
     // keep that guarantee now that there is no engine to enforce it.
